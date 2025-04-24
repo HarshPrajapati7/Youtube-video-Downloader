@@ -2,10 +2,11 @@ import streamlit as st
 import yt_dlp
 import os
 import re
+import base64
 
 st.set_page_config(page_title="YouTube Video Downloader", layout="centered")
 
-# Custom CSS Styling
+# ---------- Custom CSS for YouTube-style ----------
 st.markdown("""
     <style>
         body {
@@ -16,112 +17,103 @@ st.markdown("""
         .title {
             text-align: center;
             font-size: 3em;
-            color: #FF0000;
+            color: #ff2c2c;
             font-weight: bold;
+            margin-bottom: 20px;
         }
         .stButton>button {
+            background-color: #ff4b4b;
             color: white;
-            background-color: #FF4B4B;
             border-radius: 10px;
             padding: 10px 20px;
-            border: none;
+            font-weight: bold;
+            transition: all 0.3s ease;
         }
         .stTextInput>div>input {
             border-radius: 10px;
-            background-color: #333;
+            background-color: #1e1e1e;
             color: white;
         }
-        .stSelectbox>div>div {
-            border-radius: 10px;
-            background-color: #333;
-            color: white;
+        .stProgress > div > div > div > div {
+            background-color: #e63946;
+        }
+        footer {
+            text-align: center;
+            padding-top: 20px;
+            color: #ccc;
         }
     </style>
 """, unsafe_allow_html=True)
 
-# Initialize session state
-if 'download_started' not in st.session_state:
-    st.session_state.download_started = False
-
+# ---------- Validate YouTube URL ----------
 def is_valid_youtube_url(url):
-    youtube_regex = re.compile(r'^(https?://)?(www\.)?(youtube\.com|youtu\.?be)/.+$')
-    return bool(youtube_regex.match(url)) if url else False
+    youtube_regex = r'(https?://)?(www\.)?(youtube\.com|youtu\.?be)/.+'
+    return re.match(youtube_regex, url) is not None
 
-def progress_hook(d):
-    if d['status'] == 'downloading':
-        total = d.get('total_bytes') or d.get('total_bytes_estimate') or 0
-        downloaded = d.get('downloaded_bytes', 0)
-        if total > 0:
-            progress = downloaded / total
-            # Update the existing progress bar
-            if 'progress_bar' in st.session_state:
-                st.session_state['progress_bar'].progress(min(progress, 1.0))
-        else:
-            if 'progress_bar' in st.session_state:
-                st.session_state['progress_bar'].progress(0)
+# ---------- Create Download Link ----------
+def show_download_button(file_path, file_label="Download"):
+    with open(file_path, "rb") as f:
+        data = f.read()
+        b64 = base64.b64encode(data).decode()
+        href = f'<a href="data:application/octet-stream;base64,{b64}" download="{file_path}">{file_label}</a>'
+        st.markdown(href, unsafe_allow_html=True)
 
+# ---------- Download with yt_dlp ----------
 def download_video(url):
-    # Check if the video is already being downloaded
-    if st.session_state.get('download_started', False):
-        st.warning("Download already in progress or completed!")
-        return
+    filename = None
 
-    # Mark download as started
-    st.session_state['download_started'] = True
+    def hook(d):
+        if d['status'] == 'downloading':
+            total = d.get('total_bytes') or d.get('total_bytes_estimate')
+            if total:
+                percent = d['downloaded_bytes'] / total
+                st.session_state.progress = percent
 
-    # Create a single progress bar if it doesn't exist
-    if 'progress_bar' not in st.session_state:
-        st.session_state['progress_bar'] = st.progress(0)
-    
     ydl_opts = {
-        'merge_output_format': 'mp4',
-        'progress_hooks': [progress_hook]
+        'format': 'mp4',
+        'outtmpl': '%(title)s.%(ext)s',
+        'progress_hooks': [hook],
+        'quiet': True
     }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        try:
-            info = ydl.extract_info(url, download=False)
-            filename = f"{info.get('title', 'Unknown')}.mp4"
-            if os.path.exists(filename):
-                st.warning(f"Video already downloaded: {filename}")
-            else:
-                st.write(f"Starting download: {filename}")
-                ydl.download([url])
-                st.success("Download completed!")
-        except Exception as e:
-            st.error(f"An error occurred: {str(e)}")
-        finally:
-            # Reset the download state after completion
-            st.session_state['download_started'] = False
-            # Clear the progress bar after completion
-            if 'progress_bar' in st.session_state:
-                del st.session_state['progress_bar']
 
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+        filename = f"{info['title']}.mp4"
+        if os.path.exists(filename):
+            st.warning(f"Video already exists: {filename}")
+        else:
+            ydl.download([url])
+            st.success("Download complete!")
+    return filename
+
+# ---------- Main App ----------
 def main():
     st.markdown('<div class="title">YouTube Video Downloader</div>', unsafe_allow_html=True)
-    st.write("Paste your YouTube URL below to download the video.")
+    st.write("Paste a YouTube URL to download the video in MP4 format.")
 
-    url = st.text_input("Enter YouTube URL")
+    url = st.text_input("🎥 Enter YouTube URL")
+    
+    if "progress" not in st.session_state:
+        st.session_state.progress = 0.0
 
-    # Initialize button state in session state
-    if 'button_clicked' not in st.session_state:
-        st.session_state.button_clicked = False
+    if url and is_valid_youtube_url(url):
+        if st.button("⬇ Download Video"):
+            try:
+                progress_bar = st.progress(0)
+                filename = download_video(url)
 
-    # Handle button click
-    if st.button("Download"):
-        st.session_state.button_clicked = True  # Set button state to clicked
+                # Update and show progress bar
+                for _ in range(100):
+                    progress_bar.progress(min(int(st.session_state.progress * 100), 100))
 
-    # If the button was clicked, start the download
-    if st.session_state.button_clicked:
-        if url and is_valid_youtube_url(url):
-            download_video(url)
-            st.session_state.button_clicked = False  # Reset button state after download
-        elif url:
-            st.warning("Please enter a valid YouTube URL.")
-            st.session_state.button_clicked = False  # Reset button state if invalid URL
+                if filename:
+                    show_download_button(filename, "📥 Click here to download")
+            except Exception as e:
+                st.error(f"An error occurred: {str(e)}")
+    elif url:
+        st.warning("Please enter a valid YouTube URL.")
+
+    st.markdown("<footer><hr>Made by <strong>Harsh Prajapati</strong></footer>", unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
-    st.write("Made with ❤️ by Harsh Prajapati")
-
-
-
